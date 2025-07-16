@@ -6,7 +6,6 @@
 #include "errno.h"
 
 /**
- *
  * @param bson BSON object to cache the size of
  * @return Size of the BSON object in bytes
  */
@@ -86,15 +85,26 @@ size_t bson_optimize(bson_t *bson) { // NOLINT(*-no-recursion)
 #define buf_write_32(val) buf_write_16(val); buf_write_16((val) >> 16)
 #define buf_write_64(val) buf_write_32(val); buf_write_32((val) >> 32)
 
+
 /**
- *
  * @param buffer Buffer to write BSON data into
  * @param index Current index in the buffer
  * @param bson BSON value to write
  * @return Updated index in the buffer after writing
  */
-size_t bson_write_iter(uint8_t *buffer, size_t index, const bson_t *bson) { // NOLINT(*-no-recursion)
-    buf_write_8(bson->type);
+size_t bson_write_iter(uint8_t *buffer, const size_t index, const bson_t *bson) { // NOLINT(*-no-recursion)
+    buffer[index] = bson->type;
+    if (bson->type == BSON_INVALID) return index + 1;
+    return bson_write_iter_typed(buffer, index + 1, bson);
+}
+
+/**
+ * @param buffer Buffer to write BSON data into
+ * @param index Current index in the buffer
+ * @param bson BSON value to write
+ * @return Updated index in the buffer after writing
+ */
+size_t bson_write_iter_typed(uint8_t *buffer, size_t index, const bson_t *bson) { // NOLINT(*-no-recursion)
     switch (bson->type) {
         case BSON_I8:
         case BSON_U8:
@@ -144,7 +154,10 @@ size_t bson_write_iter(uint8_t *buffer, size_t index, const bson_t *bson) { // N
             index += 4;
             const size_t array_start = index;
             for (int i = 0; i < arr.length; i++) {
-                index = bson_write_iter(buffer, index, &arr.elements[i]);
+                buffer[index++] = arr.elements[i].type;
+            }
+            for (int i = 0; i < arr.length; i++) {
+                index = bson_write_iter_typed(buffer, index, &arr.elements[i]);
             }
             const size_t array_size = index - array_start;
             buf_write_32o(array_start - 4, array_size);
@@ -155,13 +168,16 @@ size_t bson_write_iter(uint8_t *buffer, size_t index, const bson_t *bson) { // N
             index += 4;
             const size_t object_start = index;
             for (int i = 0; i < obj.length; i++) {
+                buffer[index++] = obj.elements[i].value.type;
+            }
+            for (int i = 0; i < obj.length; i++) {
                 const object_pair_t *pair = &obj.elements[i];
                 const string_t *key = &pair->key;
                 const size_t key_length = key->length;
                 buf_write_32(key_length);
                 memcpy(&buffer[index], key->data, key->length);
                 index += key->length;
-                index = bson_write_iter(buffer, index, &pair->value);
+                index = bson_write_iter_typed(buffer, index, &pair->value);
             }
             const size_t object_size = index - object_start;
             buf_write_32o(object_start - 4, object_size);
@@ -177,7 +193,6 @@ size_t bson_write_iter(uint8_t *buffer, size_t index, const bson_t *bson) { // N
 }
 
 /**
- *
  * @param buffer Pointer to a buffer that will hold the serialized BSON data
  * @param bson BSON object to serialize
  * @return 0 on success, non-zero on failure
@@ -198,7 +213,7 @@ int bson_serialize(uint8_t **buffer, bson_t *bson) {
  */
 int bson_write(FILE *file, bson_t *bson) {
     uint8_t *buffer;
-    bson_serialize(&buffer, bson);
+    if (bson_serialize(&buffer, bson) == 1) return 1;
 
     fwrite_safe(file, buffer, 1, 1 + bson->size, { free(buffer); return 1; });
 
@@ -258,10 +273,7 @@ bson_t bson_read(FILE *file) { // NOLINT(*-no-recursion)
 }
 
 #define obj_free_rest_temp() \
-while (1) { \
-    if (i == 0) break; \
-    bson_free(&bson.object.elements[--i].value); \
-} \
+while (i != 0) bson_free(&bson.object.elements[--i].value); \
 free(bson.object.elements); \
 return bson_invalid
 
@@ -274,6 +286,7 @@ bson_t bson_read_typed(FILE *file, const uint8_t type) { // NOLINT(*-no-recursio
     bson_t bson = {.type = type};
 
     uint32_t lens[2];
+    uint8_t *types;
     switch ((bson_type) type) {
         case BSON_NULL:
         case BSON_INVALID:
@@ -332,17 +345,16 @@ bson_t bson_read_typed(FILE *file, const uint8_t type) { // NOLINT(*-no-recursio
                 errno = EOVERFLOW;
                 return bson_invalid;
             }
+            types = malloc_safe(lens[0] * sizeof(uint8_t), { return bson_invalid; });
+            fread_safe(file, types, sizeof(uint8_t), lens[0], { free(types); return bson_invalid; });
             bson.array.alloc = lens[0];
             bson.array.length = lens[0];
             bson.size = lens[1];
             bson.array.elements = lens[0] ? malloc_safe(lens[0] * sizeof(bson_t), { return bson_invalid; }) : NULL;
             for (size_t i = 0; i < lens[0]; i++) {
-                const bson_t loaded = bson_read(file);
+                const bson_t loaded = bson_read_typed(file, types[i]);
                 if (loaded.type == BSON_INVALID) {
-                    while (1) {
-                        if (i == 0) break;
-                        bson_free(&bson.array.elements[--i]);
-                    }
+                    while (i != 0) bson_free(&bson.array.elements[--i]);
                     free(bson.array.elements);
                     return bson_invalid;
                 }
@@ -359,6 +371,8 @@ bson_t bson_read_typed(FILE *file, const uint8_t type) { // NOLINT(*-no-recursio
                 errno = EOVERFLOW;
                 return bson_invalid;
             }
+            types = malloc_safe(lens[0] * sizeof(uint8_t), { return bson_invalid; });
+            fread_safe(file, types, sizeof(uint8_t), lens[0], { free(types); return bson_invalid; });
             bson.object.alloc = lens[0];
             bson.object.length = lens[0];
             bson.size = lens[1];
@@ -380,7 +394,7 @@ bson_t bson_read_typed(FILE *file, const uint8_t type) { // NOLINT(*-no-recursio
 
                 pair.key.data = str;
                 fread_safe(file, str, 1, pair.key.length, { free(str); obj_free_rest_temp(); });
-                const bson_t loaded = bson_read(file);
+                const bson_t loaded = bson_read_typed(file, types[i]);
                 if (loaded.type == BSON_INVALID) {
                     free(str);
                     obj_free_rest_temp();
@@ -396,7 +410,7 @@ bson_t bson_read_typed(FILE *file, const uint8_t type) { // NOLINT(*-no-recursio
 }
 
 /**
- *
+ * Deserializes a BSON object from the provided buffer.
  * @param buffer Pointer to a buffer that holds the serialized BSON data
  * @param index_ref Pointer to an index in the buffer that will be updated
  * @return Deserialized BSON object, or bson_invalid on error
@@ -412,7 +426,9 @@ bson_t bson_deserialize(const uint8_t *buffer, uint32_t *index_ref) { // NOLINT(
 }
 
 /**
- *
+ * Deserializes a BSON object of a specific type from the provided buffer.
+ * This function reads the BSON data from the buffer starting at the current index,
+ * and updates the index reference to point to the next byte after the deserialized data.
  * @param buffer Pointer to a buffer that holds the serialized BSON data
  * @param index_ref Pointer to an index in the buffer that will be updated
  * @param type Type of BSON data to deserialize
@@ -547,6 +563,16 @@ bson_t bson_deserialize_typed(const uint8_t *buffer, uint32_t *index_ref, const 
     return bson;
 }
 
+/**
+ * This function recursively prints the BSON object, handling different types
+ * and formatting them appropriately for better readability.
+ *
+ * The `indent` parameter controls the level of indentation for nested structures.
+ * A value of -1 disables indentation for arrays and objects.
+ *
+ * @param bson BSON object to print
+ * @param indent Indentation level for pretty printing
+ */
 void bson_print_indent(const bson_t *bson, const int indent) { // NOLINT(*-no-recursion)
     if (bson == NULL) {
         printf("NULL");
@@ -648,6 +674,10 @@ void bson_print_indent(const bson_t *bson, const int indent) { // NOLINT(*-no-re
     }
 }
 
+/**
+ * Prints a BSON object with indentation for better readability.
+ * @param bson BSON object to print
+ */
 void bson_print(const bson_t *bson) {
     bson_print_indent(bson, 0);
     printf("\n");

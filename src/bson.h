@@ -37,19 +37,19 @@ typedef struct object_pair_t object_pair_t;
 typedef struct {
     char *data;
     uint32_t length;
-    uint8_t alloc;
+    uint8_t alloc; // 0 for stack, otherwise heap allocated
 } string_t;
 
 typedef struct {
     bson_t *elements;
     uint32_t length;
-    uint8_t alloc;
+    uint8_t alloc; // 0 for stack, otherwise heap allocated
 } array_t;
 
 typedef struct {
     object_pair_t *elements;
     uint32_t length;
-    uint8_t alloc;
+    uint8_t alloc; // 0 for stack, otherwise heap allocated
 } object_t;
 
 // todo: handle padding manually just in case for old systems? (with static_assert() and offsetof())
@@ -133,6 +133,10 @@ bson_t bson_deserialize(const uint8_t *buffer, uint32_t *index_ref);
 bson_t bson_deserialize_typed(const uint8_t *buffer, uint32_t *index_ref, const uint8_t type);
 
 int bson_write(FILE *file, bson_t *bson);
+
+size_t bson_write_iter(uint8_t *buffer, const size_t index, const bson_t *bson);
+
+size_t bson_write_iter_typed(uint8_t *buffer, size_t index, const bson_t *bson);
 
 bson_t bson_read(FILE *file);
 
