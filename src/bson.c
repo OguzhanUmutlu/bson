@@ -1,5 +1,6 @@
 #include "bson.h"
 
+#include <inttypes.h>
 #include <string.h>
 
 #include "utils.h"
@@ -443,8 +444,9 @@ bson_t bson_deserialize_typed(const uint8_t *buffer, uint32_t *index_ref, const 
     bson_t bson = {.type = type};
 
     uint32_t index = *index_ref;
-
     uint32_t len0, len1;
+    size_t types_index;
+
     switch ((bson_type) type) {
         case BSON_NULL:
         case BSON_INVALID:
@@ -502,18 +504,16 @@ bson_t bson_deserialize_typed(const uint8_t *buffer, uint32_t *index_ref, const 
                 errno = EOVERFLOW;
                 return bson_invalid;
             }
+            types_index = index + 8;
             bson.array.alloc = len0;
             bson.array.length = len0;
             bson.size = len1;
             bson.array.elements = len0 ? malloc_safe(len0 * sizeof(bson_t), { return bson_invalid; }) : NULL;
-            *index_ref += 8;
+            *index_ref += 8 + len0;
             for (size_t i = 0; i < len0; i++) {
-                const bson_t loaded = bson_deserialize(buffer, index_ref);
+                const bson_t loaded = bson_deserialize_typed(buffer, index_ref, buffer[types_index++]);
                 if (loaded.type == BSON_INVALID) {
-                    while (1) {
-                        if (i == 0) break;
-                        bson_free(&bson.array.elements[--i]);
-                    }
+                    while (i != 0) bson_free(&bson.array.elements[--i]);
                     free(bson.array.elements);
                     return bson_invalid;
                 }
@@ -529,15 +529,18 @@ bson_t bson_deserialize_typed(const uint8_t *buffer, uint32_t *index_ref, const 
                 errno = EOVERFLOW;
                 return bson_invalid;
             }
+            types_index = index + 8;
+            index += len0;
             bson.object.alloc = len0;
             bson.object.length = len0;
             bson.size = len1;
             bson.object.elements = len0 ? malloc_safe(len0 * sizeof(object_pair_t), { return bson_invalid; }) : NULL;
-            *index_ref += 8;
+            *index_ref += 8 + len0;
 
             for (size_t i = 0; i < len0; i++) {
                 object_pair_t pair;
                 pair.key.length = buf_read_u32o(buffer, index);
+                index += 4;
 
                 if (pair.key.length > (1 << 24)) {
                     errno = EOVERFLOW;
@@ -546,9 +549,10 @@ bson_t bson_deserialize_typed(const uint8_t *buffer, uint32_t *index_ref, const 
                 char *str = malloc_safe(pair.key.length, { obj_free_rest_temp(); });
 
                 pair.key.data = str;
-                memcpy(str, &buffer[index + 4], pair.key.length);
+                memcpy(str, &buffer[index], pair.key.length);
                 *index_ref += 4 + pair.key.length;
-                const bson_t loaded = bson_deserialize(buffer, index_ref);
+                index += pair.key.length;
+                const bson_t loaded = bson_deserialize_typed(buffer, index_ref, buffer[types_index++]);
                 if (loaded.type == BSON_INVALID) {
                     free(str);
                     obj_free_rest_temp();
@@ -590,7 +594,7 @@ void bson_print_indent(const bson_t *bson, const int indent) { // NOLINT(*-no-re
             printf("%d", bson->i32);
             break;
         case BSON_I64:
-            printf("%ld", bson->i64);
+            printf("%" PRId64, bson->i64);
             break;
         case BSON_U8:
             printf("%u", bson->u8);
@@ -602,7 +606,7 @@ void bson_print_indent(const bson_t *bson, const int indent) { // NOLINT(*-no-re
             printf("%u", bson->u32);
             break;
         case BSON_U64:
-            printf("%lu", bson->u64);
+            printf("%" PRIu64, bson->u64);
             break;
         case BSON_F32:
             printf("%f", bson->f32);
@@ -628,7 +632,7 @@ void bson_print_indent(const bson_t *bson, const int indent) { // NOLINT(*-no-re
             printf(">");
             break;
         case BSON_DATE:
-            printf("date(%lu)", bson->u64);
+            printf("date(%" PRIu64 ")", bson->u64);
             break;
         case BSON_ARRAY:
             printf("[\n");
