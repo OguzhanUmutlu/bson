@@ -9,15 +9,16 @@ int main() {
         return 1;
     }
 
-    const char bytes[] = {0, 1};
-    bson_t byt = bson_bytes(bytes);
+    const char raw_bytes[] = {0, 1};
+    const bson_t bytes = bson_bytes(raw_bytes);
 
-    bson_print(&byt);
+    bson_print(&bytes);
 
     const object_pair_t pairs[] = {
         {string("name"), bson_string("Alice")},
         {string("age"), bson_i32(20)},
-        {string("is_student"), bson_true}
+        {string("is_student"), bson_true},
+        {string("some_bytes"), bytes}
     };
 
     bson_t document = bson_object(pairs);

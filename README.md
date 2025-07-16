@@ -1,8 +1,12 @@
-# bson
+# BSON - Binary JavaScript Object Notation
 
-This is a modified version of BSON made in C. Works both in files, in-memory and networking. Includes developer-friendly
-functions for creating, printing, serializing, deserializing, reading and writing BSON objects. The API is designed to be simple
-and intuitive, making it easy to work with BSON data structures.
+This is a modified version of BSON made in C. Optimized perfectly to work for files, in-memory and networking. Includes
+developer-friendly functions for creating, printing, serializing, deserializing, reading and writing BSON objects. The
+API is designed to be simple and intuitive, making it easy to work with BSON data structures. There are a few
+differences from this and the official BSON. When serializing an array's elements' types are shoved in the beginning
+instead of being in front of the elements which makes it a bit faster. Another difference is the fact that since arrays
+and objects are dynamically sized they are both prefixed with their length and their size in bytes which makes indexing
+faster.
 
 # Data types
 

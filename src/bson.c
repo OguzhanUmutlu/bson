@@ -57,26 +57,28 @@ size_t bson_optimize(bson_t *bson) { // NOLINT(*-no-recursion)
     return 0;
 }
 
-#if defined(__BYTE_ORDER__) && (__BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__)
+#if defined(__BYTE_ORDER__) && (__BYTE_ORDER__ == __ORDER_BIG_ENDIAN__)
+#define LE_bswap16(val) val = __builtin_bswap16(val)
+#define LE_bswap32(val) val = __builtin_bswap32(val)
+#define LE_bswap64(val) val = __builtin_bswap64(val)
+#elif defined(__BYTE_ORDER__) && (__BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__)
+#define LE_bswap16(val)
+#define LE_bswap32(val)
+#define LE_bswap64(val)
+#else
+#error "Cannot determine endianness"
+#endif
+
 #define buf_write_8o(index, val) buffer[index] = (val) & 0xFF
 #define buf_write_16o(index, val) buf_write_8o(index, val); buf_write_8o(index + 1, (val) >> 8)
 #define buf_write_32o(index, val) buf_write_16o(index, val); buf_write_16o(index + 2, (val) >> 16)
 #define buf_write_64o(index, val) buf_write_32o(index, val); buf_write_32o(index + 4, (val) >> 32)
 #define buf_read_u32o(buf, index) buf[index] | (buf[index + 1] << 8) | (buf[index + 2] << 16) | (buf[index + 3] << 24)
-#elif defined(__BYTE_ORDER__) && (__BYTE_ORDER__ == __ORDER_BIG_ENDIAN__)
-#define buf_write_8o(index, val) buffer[index] = (val) & 0xFF
-#define buf_write_16o(index, val) buf_write_8o(index, (val) >> 8); buf_write_8o(index, val)
-#define buf_write_32o(index, val) buf_write_16o(index, (val) >> 16); buf_write_16o(index, val)
-#define buf_write_64o(index, val) buf_write_32o(index, (val) >> 32); buf_write_32o(index, val)
-#define buf_read_u32o(buf, index) (buf[index] << 24) | (buf[index + 1] << 16) | (buf[index + 2] << 8) | buf[index + 3]
-#else
-#error "Cannot determine endianness"
-#endif
 
-#define buf_write_8(val) buf_write_8o(index, val); index++
-#define buf_write_16(val) buf_write_16o(index, val); index += 2
-#define buf_write_32(val) buf_write_32o(index, val); index += 4
-#define buf_write_64(val) buf_write_64o(index, val); index += 8
+#define buf_write_8(val) buffer[index++] = (val) & 0xFF
+#define buf_write_16(val) buf_write_8(val); buf_write_8((val) >> 8)
+#define buf_write_32(val) buf_write_16(val); buf_write_16((val) >> 16)
+#define buf_write_64(val) buf_write_32(val); buf_write_32((val) >> 32)
 
 /**
  *
@@ -281,12 +283,14 @@ bson_t bson_read_typed(FILE *file, const uint8_t type) { // NOLINT(*-no-recursio
         case BSON_I16:
         case BSON_U16:
             fread_safe(file, &bson.u16, sizeof(uint16_t), 1, { return bson_invalid; });
+            LE_bswap16(bson.u16);
             bson.size = 2;
             break;
         case BSON_I32:
         case BSON_U32:
         case BSON_F32:
             fread_safe(file, &bson.u32, sizeof(uint32_t), 1, { return bson_invalid; });
+            LE_bswap32(bson.u32);
             bson.size = 4;
             break;
         case BSON_I64:
@@ -294,12 +298,14 @@ bson_t bson_read_typed(FILE *file, const uint8_t type) { // NOLINT(*-no-recursio
         case BSON_F64:
         case BSON_DATE:
             fread_safe(file, &bson.u64, sizeof(uint64_t), 1, { return bson_invalid; });
+            LE_bswap64(bson.u64);
             bson.size = 8;
             break;
         case BSON_STRING:
         case BSON_BYTES:
             uint32_t len;
             fread_safe(file, &len, sizeof(uint32_t), 1, { return bson_invalid; });
+            LE_bswap32(len);
             if (len > (1 << 24)) {
                 errno = EOVERFLOW;
                 return bson_invalid;
@@ -314,6 +320,8 @@ bson_t bson_read_typed(FILE *file, const uint8_t type) { // NOLINT(*-no-recursio
             break;
         case BSON_ARRAY:
             fread_safe(file, &lens, sizeof(uint32_t), 2, { return bson_invalid; });
+            LE_bswap32(lens[0]);
+            LE_bswap32(lens[1]);
             if (lens[0] > (1 << 24) || lens[1] > (1 << 24)) {
                 errno = EOVERFLOW;
                 return bson_invalid;
@@ -339,6 +347,8 @@ bson_t bson_read_typed(FILE *file, const uint8_t type) { // NOLINT(*-no-recursio
             break;
         case BSON_OBJECT:
             fread_safe(file, &lens, sizeof(uint32_t), 2, { return bson_invalid; });
+            LE_bswap32(lens[0]);
+            LE_bswap32(lens[1]);
             if (lens[0] > (1 << 24) || lens[1] > (1 << 24)) {
                 errno = EOVERFLOW;
                 return bson_invalid;
@@ -353,9 +363,11 @@ bson_t bson_read_typed(FILE *file, const uint8_t type) { // NOLINT(*-no-recursio
             for (size_t i = 0; i < lens[0]; i++) {
                 object_pair_t pair;
                 fread_safe(file, &pair.key.length, sizeof(uint32_t), 1, { return bson_invalid; });
+                LE_bswap32(pair.key.length);
 
                 if (pair.key.length > (1 << 24)) {
                     errno = EOVERFLOW;
+
                     obj_free_rest_temp();
                 }
                 char *str = malloc_safe(pair.key.length, { obj_free_rest_temp(); });
@@ -560,7 +572,7 @@ void bson_print_indent(const bson_t *bson, const int indent) { // NOLINT(*-no-re
             printf("%d", bson->i32);
             break;
         case BSON_I64:
-            printf("%lld", bson->i64);
+            printf("%ld", bson->i64);
             break;
         case BSON_U8:
             printf("%u", bson->u8);
@@ -572,7 +584,7 @@ void bson_print_indent(const bson_t *bson, const int indent) { // NOLINT(*-no-re
             printf("%u", bson->u32);
             break;
         case BSON_U64:
-            printf("%llu", bson->u64);
+            printf("%lu", bson->u64);
             break;
         case BSON_F32:
             printf("%f", bson->f32);
@@ -590,7 +602,7 @@ void bson_print_indent(const bson_t *bson, const int indent) { // NOLINT(*-no-re
             printf("\"%.*s\"", bson->string.length, bson->string.data);
             break;
         case BSON_BYTES:
-            printf("<Buffer ", bson->string.length);
+            printf("<Buffer ");
             for (size_t i = 0; i < bson->string.length; i++) {
                 if (i > 0) printf(" ");
                 printf("%02x", (unsigned char) bson->string.data[i]);
@@ -598,7 +610,7 @@ void bson_print_indent(const bson_t *bson, const int indent) { // NOLINT(*-no-re
             printf(">");
             break;
         case BSON_DATE:
-            printf("date(%llu)", bson->u64);
+            printf("date(%lu)", bson->u64);
             break;
         case BSON_ARRAY:
             printf("[\n");
