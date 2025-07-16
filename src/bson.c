@@ -73,7 +73,13 @@ size_t bson_optimize(bson_t *bson) { // NOLINT(*-no-recursion)
 #define buf_write_16o(index, val) buf_write_8o(index, val); buf_write_8o(index + 1, (val) >> 8)
 #define buf_write_32o(index, val) buf_write_16o(index, val); buf_write_16o(index + 2, (val) >> 16)
 #define buf_write_64o(index, val) buf_write_32o(index, val); buf_write_32o(index + 4, (val) >> 32)
+#define buf_read_u8o(buf, index) buf[index]
+#define buf_read_u16o(buf, index) (buf[index] | (buf[index + 1] << 8))
 #define buf_read_u32o(buf, index) buf[index] | (buf[index + 1] << 8) | (buf[index + 2] << 16) | (buf[index + 3] << 24)
+#define buf_read_u64o(buf, index) \
+    ((uint64_t)buf[index] | ((uint64_t)buf[index + 1] << 8) | ((uint64_t)buf[index + 2] << 16) | \
+     ((uint64_t)buf[index + 3] << 24) | ((uint64_t)buf[index + 4] << 32) | ((uint64_t)buf[index + 5] << 40) | \
+     ((uint64_t)buf[index + 6] << 48) | ((uint64_t)buf[index + 7] << 56))
 
 #define buf_write_8(val) buffer[index++] = (val) & 0xFF
 #define buf_write_16(val) buf_write_8(val); buf_write_8((val) >> 8)
@@ -396,7 +402,7 @@ bson_t bson_read_typed(FILE *file, const uint8_t type) { // NOLINT(*-no-recursio
  * @return Deserialized BSON object, or bson_invalid on error
  */
 bson_t bson_deserialize(const uint8_t *buffer, uint32_t *index_ref) { // NOLINT(*-no-recursion)
-    const uint8_t type = buffer[*index_ref++];
+    const uint8_t type = buffer[(*index_ref)++];
     if (type >= BSON_MAX || type <= 0) {
         errno = EINVAL;
         return bson_invalid;
@@ -433,16 +439,12 @@ bson_t bson_deserialize_typed(const uint8_t *buffer, uint32_t *index_ref, const 
         case BSON_I8:
         case BSON_U8:
             bson.u8 = buffer[index];
-            *index_ref++;
+            (*index_ref)++;
             bson.size = 1;
             break;
         case BSON_I16:
         case BSON_U16:
-#if defined(__BYTE_ORDER__) && (__BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__)
-            bson.u16 = buffer[index] | (buffer[index + 1] << 8);
-#else
-            bson.u16 = (buffer[index] << 8) | buffer[index + 1];
-#endif
+            bson.u16 = buf_read_u16o(buffer, index);
             *index_ref += 2;
             bson.size = 2;
             break;
@@ -457,17 +459,7 @@ bson_t bson_deserialize_typed(const uint8_t *buffer, uint32_t *index_ref, const 
         case BSON_U64:
         case BSON_F64:
         case BSON_DATE:
-#if defined(__BYTE_ORDER__) && (__BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__)
-            bson.u64 = ((uint64_t) buffer[index] | ((uint64_t) buffer[index + 1] << 8) |
-                        ((uint64_t) buffer[index + 2] << 16) | ((uint64_t) buffer[index + 3] << 24)) |
-                       (((uint64_t) buffer[index + 4] | ((uint64_t) buffer[index + 5] << 8) |
-                         ((uint64_t) buffer[index + 6] << 16) | ((uint64_t) buffer[index + 7] << 24)) << 32);
-#else
-            bson.u64 = (((uint64_t) buffer[index] << 56) | ((uint64_t) buffer[index + 1] << 48) |
-                                 ((uint64_t) buffer[index + 2] << 40) | ((uint64_t) buffer[index + 3] << 32)) |
-                                (((uint64_t) buffer[index + 4] << 24) | ((uint64_t) buffer[index + 5] << 16) |
-                                 ((uint64_t) buffer[index + 6] << 8) | (uint64_t) buffer[index + 7]);
-#endif
+            bson.u64 = buf_read_u64o(buffer, index);
             *index_ref += 8;
             bson.size = 8;
             break;
